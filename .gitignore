@@ -1,0 +1,16 @@
+# Slock runtime
+.slock/
+
+# Database
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# System
+.DS_Store
