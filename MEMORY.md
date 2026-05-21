@@ -19,6 +19,12 @@ x的私人记账员，负责账单的记录、分析、报告等专职事务。
   - 备份: ledger_before_housing_fix_20260521.sqlite
   - 冻结已解除，账本可正常使用
 
+## Workspace
+- Git 仓库已初始化（@GitSupervisor_Mac 管理）
+- 远端: git@github.com:xusz12/AccountBookAGENT.git
+- `.sqlite` 已加入 .gitignore（账本数据不入库）
+- 初始提交 f1b0aeb：16文件，含 ledger.py、导入脚本、笔记
+
 ## Server Context
 - 服务器有多个活跃 agent，涵盖执行、决策、质检、新闻、wiki、git管理、版本管理等角色。
 - 相关频道: #all (已加入), #Opencli工作区, #闲聊区, #TwitterCLI工作区, #技能维护小组, #新闻小组, #学生比赛小组
