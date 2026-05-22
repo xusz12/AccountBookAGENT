@@ -119,6 +119,7 @@ KEYWORD_RULES = {
     '按摩': ('支出', '娱乐', '按摩'),
     # --- 生活 ---
     '理发': ('支出', '生活', '理发'),
+    '剪头发': ('支出', '生活', '理发'),
     '学习': ('支出', '生活', '学习'),
     '书': ('支出', '购物', '书籍'),
     '宠物': ('支出', '生活', '宠物'),
@@ -159,6 +160,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS transactions (
                 id              TEXT PRIMARY KEY,
                 date            TEXT NOT NULL,
+                time            TEXT DEFAULT '',
                 type            TEXT NOT NULL CHECK(type IN ('收入','支出')),
                 parent_category TEXT NOT NULL,
                 child_category  TEXT NOT NULL,
@@ -205,11 +207,27 @@ def parse_nl(nl_input, today=None):
         day = int(day_match.group(1))
         date_str = f"{today[:8]}{day:02d}"
 
-    # 检查歧义关键词
-    for keyword, options in AMBIGUOUS_KEYWORDS.items():
-        if keyword in nl_input:
-            opts_str = ' 还是 '.join([f'{t}-{p}›{c}' for t, p, c in options])
-            return None, f"「{keyword}」是 {opts_str}？"
+    # 时间提取
+    now = datetime.now()
+    time_str = f"{date_str} {now.strftime('%H:%M')}"
+    hm_match = re.search(r'(\d{1,2}):(\d{2})', nl_input)
+    hour_match = re.search(r'(\d{1,2})点', nl_input)
+    if hm_match:
+        h, m = int(hm_match.group(1)), int(hm_match.group(2))
+        time_str = f"{date_str} {h:02d}:{m:02d}"
+    elif hour_match:
+        h = int(hour_match.group(1))
+        if '下午' in nl_input or '晚上' in nl_input:
+            if h < 12: h += 12
+        elif '中午' in nl_input and h < 12:
+            h += 12
+        time_str = f"{date_str} {h:02d}:00"
+    elif '中午' in nl_input:
+        time_str = f"{date_str} 12:00"
+    elif '早上' in nl_input:
+        time_str = f"{date_str} 08:00"
+    elif '晚上' in nl_input:
+        time_str = f"{date_str} 20:00"
 
     # 关键词匹配
     ie_type, parent, child = None, None, None
@@ -219,6 +237,13 @@ def parse_nl(nl_input, today=None):
             if matched_kw is None or len(keyword) > len(matched_kw):
                 ie_type, parent, child = t, p, c
                 matched_kw = keyword
+
+    # 仅关键词未命中时才检查歧义关键词
+    if ie_type is None:
+        for keyword, options in AMBIGUOUS_KEYWORDS.items():
+            if keyword in nl_input:
+                opts_str = ' 还是 '.join([f'{t}-{p}›{c}' for t, p, c in options])
+                return None, f"「{keyword}」是 {opts_str}？"
 
     # 兜底
     if ie_type is None:
@@ -246,10 +271,11 @@ def parse_nl(nl_input, today=None):
         if tag_kw in nl_input:
             tags.append(tag_kw)
 
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     record = {
         'id': str(uuid.uuid4())[:8],
         'date': date_str,
+        'time': time_str,
         'type': ie_type,
         'parent_category': parent,
         'child_category': child,
@@ -257,8 +283,8 @@ def parse_nl(nl_input, today=None):
         'note': note,
         'tags': json.dumps(tags, ensure_ascii=False) if tags else '[]',
         'source': 'chat',
-        'created_at': now,
-        'updated_at': now,
+        'created_at': now_str,
+        'updated_at': now_str,
     }
     return record, None
 
@@ -271,11 +297,11 @@ def total_count():
 def insert(record):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            INSERT INTO transactions (id, date, type, parent_category, child_category, amount, note, tags, source, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO transactions (id, date, time, type, parent_category, child_category, amount, note, tags, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            record['id'], record['date'], record['type'],
-            record['parent_category'], record['child_category'],
+            record['id'], record['date'], record.get('time', ''),
+            record['type'], record['parent_category'], record['child_category'],
             record['amount'], record['note'], record['tags'],
             record['source'], record['created_at'], record['updated_at']
         ))
@@ -308,7 +334,7 @@ def get(record_id):
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute("SELECT * FROM transactions WHERE id = ?", (record_id,)).fetchone()
     if row:
-        cols = ['id', 'date', 'type', 'parent_category', 'child_category', 'amount', 'note', 'tags', 'source', 'created_at', 'updated_at']
+        cols = ['id', 'date', 'type', 'parent_category', 'child_category', 'amount', 'note', 'tags', 'source', 'created_at', 'updated_at', 'time']
         return dict(zip(cols, row))
     return None
 
@@ -366,13 +392,13 @@ def query(period='本月', parent=None, child=None, type_=None, limit=50, detail
         where.append("child_category = ?")
         params.append(child)
 
-    sql = f"SELECT * FROM transactions WHERE {' AND '.join(where)} ORDER BY date DESC, created_at DESC LIMIT ?"
+    sql = f"SELECT * FROM transactions WHERE {' AND '.join(where)} ORDER BY date DESC, time DESC, created_at DESC LIMIT ?"
     params.append(limit)
 
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(sql, params).fetchall()
 
-    cols = ['id', 'date', 'type', 'parent_category', 'child_category', 'amount', 'note', 'tags', 'source', 'created_at', 'updated_at']
+    cols = ['id', 'date', 'type', 'parent_category', 'child_category', 'amount', 'note', 'tags', 'source', 'created_at', 'updated_at', 'time']
     results = [dict(zip(cols, r)) for r in rows]
 
     # Aggregation
@@ -397,6 +423,8 @@ def query(period='本月', parent=None, child=None, type_=None, limit=50, detail
         scope_parts.append(f"type={type_}")
     if parent:
         scope_parts.append(f"parent={parent}")
+    if child:
+        scope_parts.append(f"child={child}")
     lines.append(f"📊 {label} 汇总")
     lines.append(f"   {' | '.join(scope_parts)}")
     lines.append(f"   收入 ¥{total_income:,.2f} | 支出 ¥{total_expense:,.2f} | 净额 ¥{total_income - total_expense:,.2f}")
@@ -417,7 +445,9 @@ def query(period='本月', parent=None, child=None, type_=None, limit=50, detail
             tags_list = json.loads(r['tags']) if r['tags'] and r['tags'] != '[]' else []
             tags_str = f" [{', '.join(tags_list)}]" if tags_list else ''
             note_str = f" — {r['note']}" if r['note'] else ''
-            lines.append(f"   {r['date']} | {r['type']} | {r['parent_category']}›{r['child_category']} | ¥{r['amount']:,.2f}{tags_str}{note_str}")
+            time_val = r.get('time', '')
+            time_display = f" {time_val[11:]}" if time_val and ' ' in time_val else (f" {time_val}" if time_val else '')
+            lines.append(f"   {r['date']}{time_display} | {r['type']} | {r['parent_category']}›{r['child_category']} | ¥{r['amount']:,.2f}{tags_str}{note_str}")
 
     return '\n'.join(lines), results
 
@@ -433,26 +463,69 @@ def echo(record, action='已记录'):
     tags_str = f" [{', '.join(tags_list)}]" if tags_list else ''
     note_str = f" — {record.get('note', '')}" if record.get('note') else ''
     total = total_count()
-    return (f"✅ {action}：txn_{record['id']} | {record['date']} | {record['type']} | "
+    time_val = record.get('time', '')
+    time_display = f" {time_val[11:]}" if time_val and ' ' in time_val else (f" {time_val}" if time_val else '')
+    return (f"✅ {action}：txn_{record['id']} | {record['date']}{time_display} | {record['type']} | "
             f"{record['parent_category']} › {record['child_category']} | "
             f"¥{record['amount']:,.2f}{tags_str}{note_str}\n"
             f"   (账本共 {total} 条记录)")
 
 
 # ============================================================
+# 通用审计块生成
+# ============================================================
+def audit_block(label, results, total_inc, total_exp, scope_info):
+    """统一审计输出块，所有查询命令共用"""
+    lines = [f"📊 {label}"]
+    lines.append(f"   范围: {scope_info}")
+    lines.append(f"   收入 ¥{total_inc:,.2f} | 支出 ¥{total_exp:,.2f} | 净额 ¥{total_inc - total_exp:,.2f}")
+    lines.append(f"   命中 {len(results)} 笔（账本共 {total_count()} 条）")
+    return '\n'.join(lines)
+
+
+def check_consistency():
+    """只读一致性校验：date=substr(time,1,10)。返回 (ok, message)。失败时带代表性交易 ID。"""
+    with sqlite3.connect(DB_PATH) as conn:
+        total = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        bad_date = conn.execute("SELECT COUNT(*) FROM transactions WHERE date != substr(time, 1, 10)").fetchone()[0]
+        no_time = conn.execute("SELECT COUNT(*) FROM transactions WHERE time = ''").fetchone()[0]
+        inc = conn.execute("SELECT SUM(amount) FROM transactions WHERE type='收入'").fetchone()[0] or 0
+        exp = conn.execute("SELECT SUM(amount) FROM transactions WHERE type='支出'").fetchone()[0] or 0
+        # 失败时取代表性交易 ID
+        bad_samples = []
+        if bad_date > 0:
+            rows = conn.execute("SELECT id, date, time FROM transactions WHERE date != substr(time, 1, 10) LIMIT 5").fetchall()
+            bad_samples = [f"txn_{r[0]} (date={r[1]} time={r[2]})" for r in rows]
+        if no_time > 0:
+            rows = conn.execute("SELECT id, date FROM transactions WHERE time = '' LIMIT 5").fetchall()
+            bad_samples.extend([f"txn_{r[0]} (date={r[1]} time='')" for r in rows])
+    ok = bad_date == 0 and no_time == 0
+    lines = [f"🔍 一致性: {'✅ 通过' if ok else '❌ 异常'}"]
+    lines.append(f"   总记录: {total} | date=substr(time,1,10): {'✅' if bad_date == 0 else f'❌ {bad_date}条'} | time有值: {total - no_time}/{total}")
+    lines.append(f"   收入 ¥{inc:,.2f} | 支出 ¥{exp:,.2f} | 净额 ¥{inc - exp:,.2f}")
+    if bad_samples:
+        lines.append(f"   异常样本: {', '.join(bad_samples[:5])}")
+    return ok, '\n'.join(lines)
+
+
+# ============================================================
 # CLI
 # ============================================================
 if __name__ == '__main__':
-    import sys
+    import sys, csv, os
     if len(sys.argv) < 2:
-        print("Usage: python ledger.py init|add|get|del|q")
+        print("Usage: python ledger.py init|add|get|del|today|month|category|invest|recent|export|check")
         sys.exit(0)
 
     cmd = sys.argv[1]
+    init_db()
 
     if cmd == 'init':
-        init_db()
         print("✅ 账本已就绪")
+
+    elif cmd == 'check':
+        ok, msg = check_consistency()
+        print(msg)
 
     elif cmd == 'add':
         nl = ' '.join(sys.argv[2:])
@@ -460,9 +533,13 @@ if __name__ == '__main__':
         if confirm:
             print(f"⚠️ {confirm}")
         elif record:
-            init_db()
             insert(record)
             print(echo(record))
+            ok, check_msg = check_consistency()
+            if not ok:
+                print(f"\n⚠️ CHECK FAILED — 账本需人工复核\n{check_msg}")
+            else:
+                print(check_msg)
 
     elif cmd == 'get':
         rid = sys.argv[2]
@@ -477,12 +554,65 @@ if __name__ == '__main__':
         r = delete(rid)
         if r:
             print(echo(r, action='已删除'))
+            ok, check_msg = check_consistency()
+            if not ok:
+                print(f"\n⚠️ CHECK FAILED — 账本需人工复核\n{check_msg}")
+            else:
+                print(check_msg)
         else:
             print("未找到")
 
-    elif cmd == 'q':
+    # ============================================================
+    # v1.1 固定查询意图库
+    # ============================================================
+
+    elif cmd == 'today':
+        summary, results = query(period='今天', detail=True)
+        print(summary)
+
+    elif cmd == 'month':
+        period = sys.argv[2] if len(sys.argv) > 2 else '本月'
+        summary, results = query(period=period, detail=False)
+        print(summary)
+
+    elif cmd == 'category':
+        parent = sys.argv[2] if len(sys.argv) > 2 else None
+        child = sys.argv[3] if len(sys.argv) > 3 else None
+        period = sys.argv[4] if len(sys.argv) > 4 else '本月'
+        if not parent:
+            print("Usage: python ledger.py category <父类> [子类] [period]")
+            sys.exit(1)
+        summary, results = query(period=period, parent=parent, child=child, detail=True)
+        print(summary)
+
+    elif cmd == 'invest':
+        period = sys.argv[2] if len(sys.argv) > 2 else '本月'
+        summary, results = query(period=period, parent='投资', detail=True)
+        print(summary)
+
+    elif cmd == 'recent':
+        n = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+        summary, results = query(period=f'最近{n}', detail=True)
+        print(summary)
+
+    elif cmd == 'export':
         period = sys.argv[2] if len(sys.argv) > 2 else '本月'
         parent = sys.argv[3] if len(sys.argv) > 3 else None
-        init_db()
-        summary, _ = query(period=period, parent=parent, detail=True)
+        summary, results = query(period=period, parent=parent, detail=False, limit=99999)
         print(summary)
+        if results:
+            today_str = datetime.now().strftime('%Y%m%d')
+            safe_period = period.replace('/', '_').replace(' ', '_')
+            exports_dir = os.path.join(os.path.dirname(DB_PATH), 'exports')
+            os.makedirs(exports_dir, exist_ok=True)
+            out_path = os.path.join(exports_dir, f'export_{safe_period}_{today_str}.csv')
+            with open(out_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=['id','date','time','type','parent_category','child_category','amount','note','tags','source'])
+                writer.writeheader()
+                for r in results:
+                    writer.writerow({k: r.get(k, '') for k in writer.fieldnames})
+            print(f"\n📁 已导出: {out_path} ({len(results)} 条)")
+
+    else:
+        print(f"未知命令: {cmd}")
+        print("Usage: python ledger.py init|add|get|del|today|month|category|invest|recent|export|check")
