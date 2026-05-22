@@ -330,12 +330,16 @@ def delete(record_id):
     return record
 
 
+_COLS = ['id', 'date', 'time', 'type', 'parent_category', 'child_category',
+         'amount', 'note', 'tags', 'source', 'created_at', 'updated_at']
+_COL_STR = ', '.join(_COLS)
+
+
 def get(record_id):
     with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("SELECT * FROM transactions WHERE id = ?", (record_id,)).fetchone()
+        row = conn.execute(f"SELECT {_COL_STR} FROM transactions WHERE id = ?", (record_id,)).fetchone()
     if row:
-        cols = ['id', 'date', 'type', 'parent_category', 'child_category', 'amount', 'note', 'tags', 'source', 'created_at', 'updated_at', 'time']
-        return dict(zip(cols, row))
+        return dict(zip(_COLS, row))
     return None
 
 
@@ -392,14 +396,13 @@ def query(period='本月', parent=None, child=None, type_=None, limit=50, detail
         where.append("child_category = ?")
         params.append(child)
 
-    sql = f"SELECT * FROM transactions WHERE {' AND '.join(where)} ORDER BY date DESC, time DESC, created_at DESC LIMIT ?"
+    sql = f"SELECT {_COL_STR} FROM transactions WHERE {' AND '.join(where)} ORDER BY date DESC, time DESC, created_at DESC LIMIT ?"
     params.append(limit)
 
     with sqlite3.connect(DB_PATH) as conn:
         rows = conn.execute(sql, params).fetchall()
 
-    cols = ['id', 'date', 'type', 'parent_category', 'child_category', 'amount', 'note', 'tags', 'source', 'created_at', 'updated_at', 'time']
-    results = [dict(zip(cols, r)) for r in rows]
+    results = [dict(zip(_COLS, r)) for r in rows]
 
     # Aggregation
     by_parent = defaultdict(lambda: {'收入': 0.0, '支出': 0.0, 'count': 0})
